@@ -64,7 +64,7 @@ This project turns that finding into an interactive system:
 ### 1. Composer
 
 - **Training data:** soprano lines extracted from the Bach chorales in the `music21` corpus.
-- **Model:** variable-context Markov model predicting the next pitch from the previous 2–3 pitches, with smoothing for unseen transitions.
+- **Model:** fixed-order Markov model predicting the next pitch from the previous 2–3 pitches (`MARKOV_ORDER` in `config.py`), with smoothing for unseen transitions. The first notes of a melody have a shorter context; pad it with a start symbol.
 - **Output per note:** pitch, probability, and **surprisal** = −log₂ P(note | context).
 - **Temperature:** controls sampling only: probabilities are raised to the power 1/T and renormalized. Low T → predictable; high T → unusual.
 - **Important:** surprisal is always computed from the **untempered** model, which stands in for the listener's expectations, so values are comparable across temperatures.
@@ -79,30 +79,51 @@ This project turns that finding into an interactive system:
 
 ### 3. Synchronization
 
-- A marker is inserted into the EEG stream (`BoardShim.insert_marker`) at every note onset; the marker value encodes the note index.
+- A g.Pype `Marker` source is routed beside the EEG, and `marker.emit(note_index)` is called right before each tone starts. g.Pype timestamps the marker on the calling thread and places it on the same timeline as the EEG samples, so the marker channel shows exactly where each note started.
 - Every recording saves a **note log** CSV (see [Data formats](#data-formats)) linking marker values to pitch and surprisal.
 - A constant audio-output delay shifts responses in time but is tolerable; variable delay is the main risk.
 
 ### 4. EEG acquisition
 
-- **Hardware:** g.tec Unicorn, 8 channels (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8; verify order against device docs). Central channels (Fz, Cz) carry the auditory responses of interest.
-- **Software:** BrainFlow. Unicorn support requires **Windows or Ubuntu** and pairing through the supplied USB dongle.
+- **Hardware:** g.tec Unicorn BCI Core-8: 8 channels at 250 Hz over Bluetooth 5, with hybrid dry/wet (g.SAHARA) electrodes. Standard layout Fz, C3, Cz, C4, Pz, PO7, POz, PO8 (verify on the cap). One combined GND/REF electrode (shorted internally), placed on the right mastoid. Central channels (Fz, Cz) carry the auditory responses of interest.
+- **Software:** [g.Pype](https://gpype.gtec.at/), g.tec's Python SDK. A recording is one pipeline:
+
+  ```python
+  import gpype as gp
+
+  p = gp.Pipeline()
+  amp = gp.BCICore()                     # first Core-8 in range; µV; default montage
+  marker = gp.Marker()                   # marker.emit(note_index) before each tone
+  both = gp.Router(input_channels=[gp.Router.ALL, gp.Router.ALL])
+  p.connect(amp, both["in1"])
+  p.connect(marker, both["in2"])
+  p.connect(both, gp.HDF5Writer(file_name="recording.h5"))
+  try:
+      p.start()
+      ...                                # play notes, emitting a marker for each
+  finally:
+      p.stop()
+      p.close()
+  ```
+
+  For the live loop, a small custom `gp.Sink` hands each frame of filtered EEG to our own code (see g.Pype's `examples/s7e3_two_ends.py`). g.Pype's `examples/` folder is the best reference. The closest examples are `s3e1_bci_core.py`, `s4e9_into_mne.py` and `s5e4_oddball_paradigms.py`.
 - **Listener protocol:** seated, relaxed jaw, eyes on a fixation point, minimal movement. Blocks of 2–3 minutes with breaks.
 - **Calibration session:** 10–15 minutes of generated melodies at a mix of temperatures, giving a wide range of surprisal values.
 - **Sanity check first:** an auditory oddball (standard 1000 Hz / deviant 1200 Hz tones) to verify signal quality, markers and pipeline.
 
 ### 5. Preprocessing
 
-- Load into MNE (BrainFlow µV → volts), apply the standard 10-20 montage.
-- Mark bad channels; re-reference to the average.
+- Load the HDF5 recording into MNE (µV → volts; drop the `master_index`, `valid`, `host_time` timeline channels; the marker channel becomes a stim channel), then apply the standard 10-20 montage.
+- Mark bad channels. Keep the hardware reference (the Core-8's GND/REF electrode on the right mastoid). Do **not** re-reference to the average: with 8 mostly central channels, the average contains much of the Fz/Cz response and would cancel it.
 - Bandpass: ~1–8 Hz for TRF analysis, ~1–30 Hz for ERP plots.
 - Downsample to 64 Hz for TRFs.
-- Reject epochs/segments with large artifacts.
-- Live loop: **causal** filters only (`scipy.signal` / BrainFlow `DataFilter`).
+- Reject epochs/segments with large artifacts. MNE thresholds are in volts: `reject=dict(eeg=120e-6)` means 120 µV.
+- Live loop: **causal** filters only (`gp.Bandpass`, which is causal by default, or `scipy.signal.sosfilt`).
+- The surprise template used live must be fitted on data filtered with the **same causal filter**. Zero-phase and causal filters give responses with different timing, so a template fitted on zero-phase data would not line up with live EEG and would underestimate the gain.
 
 ### 6. Analysis
 
-**a. ERP comparison.** Epoch around note onsets, split notes into high- and low-surprisal halves, and compare averaged responses at Fz/Cz. Expected: larger response to high-surprisal notes ~100–300 ms after onset.
+**a. ERP comparison.** Epoch around note onsets, split notes into high- and low-surprisal halves, and compare averaged responses at Fz/Cz. Expected: larger response to high-surprisal notes ~100–300 ms after onset. *Caveat:* high-surprisal notes tend to be large leaps, so this comparison is confounded with interval size. It is a quick visual check; the TRF comparison below is what controls for acoustics.
 
 **b. TRF model comparison.** Fit ridge-regression TRFs (`mne.decoding.ReceptiveField`, lags ≈ −100 to 500 ms):
 
@@ -112,6 +133,7 @@ This project turns that finding into an interactive system:
 | A + M | A + surprisal |
 
 - Cross-validate **by melody** (`GroupKFold`), never by random samples.
+- Choose the ridge alpha **inside** each training fold (nested CV), so held-out melodies never influence the fit.
 - **Key result:** if A + M predicts held-out EEG better than A, the brain tracks the model's expectations beyond what acoustics explain.
 - *(Optional)* Compare surprisal from different context lengths; the one that best predicts EEG best approximates this listener's expectations.
 - *(Optional)* Behavioral check: listener rates melody surprise (1–5) or presses a key on "wrong" notes; compare with surprisal and EEG.
@@ -136,12 +158,16 @@ The fitted surprisal TRF is this listener's **surprise template** (timing, shape
 
 This is a matched filter: the template's shape is fixed from calibration, and only its strength is estimated live, so short windows can support the estimate.
 
+**Time budget:** a 50 s window holds ~110 notes, and each temperature decision averages ~3 windows, so expect about one temperature step every 2.5–5 minutes. Plan the demo length around this.
+
 ---
 
 ## Repository structure
 
+Each module folder is a Python package (has an `__init__.py`); run scripts from the repo root with `python -m <package>.<module>`.
+
 ```
-eeg-surprise-composer/
+NeurotechHacks/
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
@@ -154,7 +180,7 @@ eeg-surprise-composer/
 │   └── playback.py         # tone synthesis + playback
 ├── acquisition/
 │   ├── oddball.py          # sanity-check experiment
-│   └── record.py           # BrainFlow streaming + per-note markers
+│   └── record.py           # g.Pype recording pipeline + per-note markers
 ├── analysis/
 │   ├── preprocess.py       # MNE loading, filtering, rejection
 │   ├── erp.py              # high vs. low surprisal ERPs
@@ -172,7 +198,7 @@ eeg-surprise-composer/
 
 **`config.py`** holds everything shared: channel names/order, sampling rate, note duration, tempo, filter cutoffs, TRF lag range, window length, temperature step, file paths.
 
-**`.gitignore`** should include `data/`, `models/`, `*.fif`, recording CSVs, `__pycache__/`, `.ipynb_checkpoints/`.
+**`.gitignore`** covers `data/`, `models/`, `*.fif`, `*.npz`/`*.npy`, `*.h5`, recording CSVs, `__pycache__/`, `.ipynb_checkpoints/`.
 
 ---
 
@@ -180,19 +206,27 @@ eeg-surprise-composer/
 
 ```bash
 git clone <repo-url>
-cd eeg-surprise-composer
+cd NeurotechHacks
 python -m venv .venv
 # Windows: .venv\Scripts\activate    Linux: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Dependencies:** `numpy`, `scipy`, `pandas`, `matplotlib`, `scikit-learn`, `mne`, `brainflow`, `music21`, `sounddevice`, `jupyter` (optional: `pretty_midi`, `pylsl`).
+**Python 3.10–3.14** (required by g.Pype).
 
-After confirming everything works on the recording laptop, pin versions with `pip freeze > requirements.txt`.
+**Dependencies:** `numpy`, `scipy`, `pandas`, `matplotlib`, `scikit-learn`, `mne`, `gpype[all]`, `music21`, `sounddevice`, `jupyter` (for `notebooks/`). Optional: `pretty_midi`, `pylsl`. On macOS's zsh, quote the extra: `pip install "gpype[all]"`. g.Pype is under g.tec's non-commercial license.
+
+`requirements.txt` lists what we depend on; `requirements-lock.txt` pins the exact versions known to work together (Python 3.14, Windows). To match them exactly: `pip install -r requirements-lock.txt`. After changing dependencies, regenerate it with `pip freeze > requirements-lock.txt`.
+
+Quick check that the install works (no headset needed):
+
+```bash
+python -c "import numpy, scipy, pandas, sklearn, mne, music21, sounddevice, gpype; print('ok')"
+```
 
 **Hardware checklist**
-- [ ] Windows or Ubuntu laptop for recording
-- [ ] Unicorn USB dongle plugged in; headset paired through it
+- [ ] Recording laptop: Windows, macOS, or x86_64 Linux, with Bluetooth
+- [ ] Unicorn BCI Core-8 charged and paired over Bluetooth; GND/REF electrode on the right mastoid
 - [ ] Wired headphones
 - [ ] Electrode gel (optional, improves signal)
 
@@ -208,20 +242,22 @@ The handoff between composer, acquisition and analysis. Every recording saves on
 |--------|------|-------------|
 | `note_index` | int | Unique index; equals the EEG marker value |
 | `melody_id` | int | Melody the note belongs to (used for CV splits) |
-| `onset_time` | float | Wall-clock time the note was triggered (s) |
+| `onset_time` | float | `time.time()` when the marker was emitted (s); for logging and cross-checks (the EEG marker channel is the timing that counts) |
 | `pitch` | int | MIDI pitch number |
-| `interval` | int | Semitones from previous note (signed) |
+| `interval` | int | Semitones from previous note (signed); empty (NaN) for the first note of each melody |
 | `surprisal` | float | −log₂ P under the untempered model (bits) |
 | `temperature` | float | Sampling temperature in effect |
 
+**Oddball recordings** use the same columns: `melody_id` = block number, `pitch` = nearest MIDI pitch to the tone, and `surprisal`, `interval`, `temperature` left empty (NaN). Whether a tone is standard or deviant is derived from `pitch`.
+
 ### EEG recordings
 
-BrainFlow CSV via `DataFilter.write_file`; channel indices from `BoardShim.get_eeg_channels` / `get_marker_channel`.
+HDF5 via `gp.HDF5Writer`. HDF5 keeps channel units and roles (a CSV doesn't, so its scale is ambiguous). Columns are the 8 EEG channels (µV), BCICore's timeline channels (`master_index`, `valid`, `host_time`) and the marker channel (0 = no marker, otherwise `note_index`). Read the file back with `gp.HDF5Reader` in batch mode, then convert it to MNE as in g.Pype's `examples/s4e9_into_mne.py`. g.Pype writers append the date and time to the file name, so the recording script renames the file to the convention below once the pipeline is closed.
 
 ### File naming
 
 ```
-YYYY-MM-DD_subjNN_<session>_<run>.csv          # EEG
+YYYY-MM-DD_subjNN_<session>_<run>.h5           # EEG
 YYYY-MM-DD_subjNN_<session>_<run>_notes.csv    # note log
 ```
 Sessions: `oddball`, `calibration`, `live`.
@@ -231,25 +267,27 @@ Sessions: `oddball`, `calibration`, `live`.
 ## Running the pipeline
 
 ```bash
+# Run everything from the repo root with -m so `import config` works.
+
 # 0. Sanity check (signal + markers + ERP)
-python acquisition/oddball.py
-python analysis/erp.py --session oddball
+python -m acquisition.oddball
+python -m analysis.erp --session oddball
 
 # 1. Train the composer
-python composer/markov.py --train
+python -m composer.markov --train
 
 # 2. Calibration recording (10–15 min)
-python acquisition/record.py --session calibration
+python -m acquisition.record --session calibration
 
 # 3. Analysis: ERPs, TRF comparison, save template
-python analysis/erp.py --session calibration
-python analysis/trf.py --session calibration --save-template
+python -m analysis.erp --session calibration
+python -m analysis.trf --session calibration --save-template
 
 # 4. Closed loop
-python closed_loop/run_live.py --template models/<subject>_template.npz
+python -m closed_loop.run_live --template models/<subject>_template.npz
 ```
 
-*(Command-line arguments are the intended interface; update as scripts are implemented.)*
+*(Command-line arguments are the intended interface; update as scripts are implemented. `python acquisition/oddball.py` would fail, because it puts `acquisition/` rather than the repo root on the import path.)*
 
 ---
 
@@ -258,7 +296,7 @@ python closed_loop/run_live.py --template models/<subject>_template.npz
 | Tier | Deliverable | Status |
 |------|-------------|--------|
 | Sanity check | Oddball ERP: deviant vs. standard | ☐ |
-| Guaranteed result | ERP: high vs. low surprisal notes | ☐ |
+| First look | ERP: high vs. low surprisal notes (confounded with interval size) | ☐ |
 | Core result | TRF: A + M beats A on held-out melodies | ☐ |
 | Stretch | Live closed loop adjusting temperature | ☐ |
 | Fallback | Closed loop run on recorded data / Di Liberto dataset | ☐ |
@@ -292,5 +330,5 @@ python closed_loop/run_live.py --template models/<subject>_template.npz
 - Kern, P., Heilbron, M., de Lange, F. P., & Spaak, E. (2022). Cortical activity during naturalistic music listening reflects short-range predictions based on long-term experience. *eLife*. https://doi.org/10.7554/eLife.80935
 - Di Liberto et al. Bach EEG dataset (Dryad): https://doi.org/10.5061/dryad.g1jwstqmh
 - MNE-Python: https://mne.tools
-- BrainFlow: https://brainflow.readthedocs.io
+- g.Pype (g.tec): https://gpype.gtec.at/ · https://github.com/gtec-medical-engineering/gpype
 - music21: https://web.mit.edu/music21/

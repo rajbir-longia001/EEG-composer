@@ -4,7 +4,7 @@ pandas
 matplotlib
 scikit-learn
 mne
-brainflow
+gpype[all]
 music21
 sounddevice
 jupyter
