@@ -1,0 +1,10 @@
+numpy
+scipy
+pandas
+matplotlib
+scikit-learn
+mne
+brainflow
+music21
+sounddevice
+jupyter
