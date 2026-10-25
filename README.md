@@ -79,7 +79,8 @@ This project turns that finding into an interactive system:
 
 ### 3. Synchronization
 
-- A g.Pype `Marker` source is routed beside the EEG, and `marker.emit(note_index)` is called right before each tone starts. g.Pype timestamps the marker on the calling thread and places it on the same timeline as the EEG samples, so the marker channel shows exactly where each note started.
+- A g.Pype `Marker` source is routed beside the EEG. g.Pype timestamps each marker on the calling thread and places it on the same timeline as the EEG samples.
+- A block of notes is rendered into one audio array, so onsets fall on exact samples and the sound card's clock sets the rhythm. An audio callback records when each onset will reach the DAC, and `marker.emit(note_index)` fires at that moment (`audio.playback.play_with_onsets`). Measured jitter is ~0.4 ms. The obvious alternative, emitting before each blocking `stream.write()`, jittered ~8 ms because Windows audio returns in ~20 ms blocks.
 - Every recording saves a **note log** CSV (see [Data formats](#data-formats)) linking marker values to pitch and surprisal.
 - A constant audio-output delay shifts responses in time but is tolerable; variable delay is the main risk.
 
@@ -270,8 +271,11 @@ Sessions: `oddball`, `calibration`, `live`.
 # Run everything from the repo root with -m so `import config` works.
 
 # 0. Sanity check (signal + markers + ERP)
-python -m acquisition.oddball
-python -m analysis.erp --session oddball
+python -m acquisition.view_stream                    # signal quality; close before recording
+python -m acquisition.oddball --dry-run --fake-eeg   # no hardware, silent: tests the code
+python -m acquisition.oddball --dry-run              # headset, silent: tests headset + markers
+python -m acquisition.oddball --subject 1 --run 1    # real oddball (~3 min), sync check + ERP plot
+python -m analysis.erp --session oddball --subject 1 --run 1   # re-plot later
 
 # 1. Train the composer
 python -m composer.markov --train

@@ -15,12 +15,13 @@ SESSIONS = ("oddball", "calibration", "live")
 # Acquisition uses gp.BCICore(). Read the sampling rate from the port context or
 # recording at runtime rather than hard-coding it.
 DEVICE = "Unicorn BCI Core-8"
+SERIAL_NUMBER = "U8-2025.10.15"
 # gp.BCICore's default 8-channel montage. Verify on the cap.
 CH_NAMES = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "POz", "PO8"]
 CENTRAL_CHANNELS = ["Fz", "Cz"]
 # Extra channels BCICore appends after the EEG; drop them before building MNE objects.
 TIMELINE_CHANNELS = ["master_index", "valid", "host_time"]
-MONTAGE = "standard_1020"
+MONTAGE = "colin27_1020"  # MNE's replacement for the deprecated "standard_1020"
 UV_TO_V = 1e-6  # gp.BCICore outputs µV; MNE expects volts
 EEG_EXT = ".h5"  # gp.HDF5Writer keeps units and channel roles; CSV does not
 
@@ -50,6 +51,12 @@ ODDBALL_STANDARD_HZ = 1000.0
 ODDBALL_DEVIANT_HZ = 1200.0
 ODDBALL_DEVIANT_PROB = 0.15
 ODDBALL_N_TONES = 400
+ODDBALL_DRY_RUN_TONES = 30   # default length of a --dry-run
+ODDBALL_LEAD_STANDARDS = 5   # standards before the first deviant possible
+
+# --- Recording timing ---
+RECORD_SETTLE = 2.0  # s of EEG before the first tone, so the stream is steady
+RECORD_TAIL = 1.0    # s of EEG after the last tone, so its epoch is complete
 
 # --- Recording protocol ---
 BLOCK_DURATION = 150.0  # s, 2–3 minute blocks
@@ -62,6 +69,7 @@ CALIBRATION_TEMPERATURES = [0.5, 1.0, 1.5, 2.0]
 ERP_BAND = (1.0, 30.0)  # Hz
 TRF_BAND = (1.0, 8.0)   # Hz
 TRF_SFREQ = 64          # Hz after downsampling
+NOTCH_BANDS = [(48.0, 52.0), (58.0, 62.0)]  # Hz, 50 and 60 Hz mains (US is 60)
 CAUSAL_FILTER_ORDER = 4  # Butterworth order for gp.Bandpass / scipy sosfilt (live + template fit)
 
 # --- ERPs ---
