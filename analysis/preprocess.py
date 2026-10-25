@@ -129,23 +129,34 @@ def causal_bandpass(data, sfreq, band=config.TRF_BAND, order=config.CAUSAL_FILTE
     return sosfilt(sos, data, axis=-1)
 
 
-def trf_preprocess(raw):
-    """Good EEG channels, causal TRF band, decimated.
+def trf_arrays(data_uv, sfreq):
+    """Causal TRF band + decimation on a plain array (channels × samples, µV).
 
-    Returns (eeg, sfreq, ch_names, good): eeg in µV with shape
-    (n_samples, n_channels) at sfreq = raw sfreq / TRF_DECIM, and a boolean
-    mask that is False within ARTIFACT_PAD of any sample over ERP_REJECT.
+    Used by trf_preprocess (offline) and the live loop, so both get exactly
+    the same processing. Returns (eeg, sfreq, good): eeg (n_samples,
+    n_channels) in µV at sfreq / TRF_DECIM, and a mask that is False within
+    ARTIFACT_PAD of any sample over ERP_REJECT.
     """
-    picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
-    ch_names = [raw.ch_names[i] for i in picks]
-    data = causal_bandpass(raw.get_data(picks=picks), raw.info["sfreq"])
-    data = data[:, ::config.TRF_DECIM].T / config.UV_TO_V
-    sfreq = raw.info["sfreq"] / config.TRF_DECIM
+    data = causal_bandpass(np.asarray(data_uv, dtype=float), sfreq)
+    data = data[:, ::config.TRF_DECIM].T
+    sfreq = sfreq / config.TRF_DECIM
 
     over = np.abs(data).max(axis=1) > config.ERP_REJECT["eeg"] / config.UV_TO_V
     pad = int(round(config.ARTIFACT_PAD * sfreq))
     good = ~np.convolve(over, np.ones(2 * pad + 1), mode="same").astype(bool)
-    return data, sfreq, ch_names, good
+    return data, sfreq, good
+
+
+def trf_preprocess(raw):
+    """Good EEG channels of an MNE Raw, causal TRF band, decimated.
+
+    Returns (eeg, sfreq, ch_names, good); see trf_arrays.
+    """
+    picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
+    ch_names = [raw.ch_names[i] for i in picks]
+    eeg, sfreq, good = trf_arrays(raw.get_data(picks=picks) / config.UV_TO_V,
+                                  raw.info["sfreq"])
+    return eeg, sfreq, ch_names, good
 
 
 def main():

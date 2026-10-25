@@ -37,7 +37,7 @@ import numpy as np
 
 import config
 from acquisition.session import check_sync, record_block, recording_paths
-from analysis.erp import oddball_epochs, plot_oddball_erp
+from analysis.erp import oddball_epochs, plot_oddball_erp, window_ttest
 from analysis.preprocess import load_recording
 from audio.playback import hz_to_midi
 
@@ -120,6 +120,7 @@ def main():
           f"deviant {kept['deviant']}/{played['deviant']}")
     if kept["standard"] < 0.5 * played["standard"]:
         print("  many epochs rejected: check electrode contact with view_stream")
+    window_ttest(epochs, "standard", "deviant")
 
     plot_oddball_erp(epochs, title=eeg_path.stem + (" (fake EEG)" if args.fake_eeg else ""),
                      out_path=config.FIGURES_DIR / f"{eeg_path.stem}_erp.png",

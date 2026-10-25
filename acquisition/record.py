@@ -40,19 +40,26 @@ NOTE_INDEX_STRIDE = 1000  # note_index offset per block (a block has < 400 notes
 MELODY_ID_STRIDE = 100    # melody_id offset per block
 
 
-def build_block(model, block, duration, rng):
+def build_block(model, block, duration, rng, temperature=None):
     """Generate melodies until the block lasts `duration` seconds.
+
+    temperature=None mixes CALIBRATION_TEMPERATURES (shuffled, balanced);
+    a number plays every melody at that temperature (the live loop).
 
     Returns (freqs, notes): Hz per IOI slot (None = silent gap) and one
     note-log row per sounding note (without note_index/onset_time).
     """
+    fixed = temperature
     temps = []
     freqs, notes = [], []
     k = 0
     while len(freqs) * config.IOI < duration:
-        if not temps:  # refill: every temperature equally often, random order
-            temps = list(rng.permutation(config.CALIBRATION_TEMPERATURES))
-        temperature = float(temps.pop())
+        if fixed is not None:
+            temperature = float(fixed)
+        else:
+            if not temps:  # refill: every temperature equally often, random order
+                temps = list(rng.permutation(config.CALIBRATION_TEMPERATURES))
+            temperature = float(temps.pop())
         k += 1
         pitches, bits = sample_melody(model, temperature=temperature, rng=rng)
         shift = random_key_shift(rng)
@@ -73,12 +80,17 @@ def summarize(notes):
               f"{g['surprisal'].min():>5.1f}–{g['surprisal'].max():<5.1f}")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
+def run_session(description, session, default_blocks, build, after_block=None):
+    """Command-line block recording shared by calibration and violation sessions.
+
+    build(model, block, duration, rng) -> (freqs, notes, extra)
+    after_block(eeg_path, log, first_index, extra) runs after each block is saved.
+    """
+    ap = argparse.ArgumentParser(description=description,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--subject", type=int, help="subject number (required unless --dry-run)")
     ap.add_argument("--blocks", type=int, help=f"number of blocks (default "
-                    f"{config.CALIBRATION_BLOCKS}; 1 with --dry-run)")
+                    f"{default_blocks}; 1 with --dry-run)")
     ap.add_argument("--start-block", type=int, default=1, help="resume from this block")
     ap.add_argument("--dry-run", action="store_true", help="silent, short block to test the setup")
     ap.add_argument("--fake-eeg", action="store_true", help="signal generator instead of headset")
@@ -96,7 +108,7 @@ def main():
         if args.subject is None:
             ap.error("--subject is required for a real recording")
         subject = args.subject
-        n_blocks = args.blocks or config.CALIBRATION_BLOCKS
+        n_blocks = args.blocks or default_blocks
         duration = config.BLOCK_DURATION
 
     try:
@@ -105,7 +117,7 @@ def main():
         ap.error("no trained model; run: python -m composer.markov --train")
 
     blocks = range(args.start_block, n_blocks + 1)
-    paths = {b: recording_paths(subject, "calibration", f"dry{b}" if args.dry_run else str(b))
+    paths = {b: recording_paths(subject, session, f"dry{b}" if args.dry_run else str(b))
              for b in blocks}
     existing = [e.name for e, _ in paths.values() if e.exists()]
     if existing and not (args.dry_run or args.overwrite):
@@ -116,17 +128,19 @@ def main():
     all_ok = True
     for b in blocks:
         eeg_path, notes_path = paths[b]
-        freqs, notes = build_block(model, b, duration, rng)
+        freqs, notes, extra = build(model, b, duration, rng)
         print(f"\n=== Block {b}/{n_blocks}: {len(notes)} notes, ~{len(freqs) * config.IOI / 60:.1f} min"
               f"{' [DRY RUN: silent]' if args.dry_run else ''}"
               f"{' [FAKE EEG]' if args.fake_eeg else ''} ===")
-        log, spacing = record_block(eeg_path, notes_path, freqs, notes,
-                                    first_index=(b - 1) * NOTE_INDEX_STRIDE + 1,
+        first_index = (b - 1) * NOTE_INDEX_STRIDE + 1
+        log, spacing = record_block(eeg_path, notes_path, freqs, notes, first_index=first_index,
                                     silent=args.dry_run, fake_eeg=args.fake_eeg,
                                     serial=args.serial)
         if log.empty:
             print("no notes were played; stopping")
             return
+        if after_block:
+            after_block(eeg_path, log, first_index, extra)
         all_ok &= check_sync(load_recording(eeg_path), log, spacing)
         summarize(log)
         if len(log) < len(notes):
@@ -135,8 +149,13 @@ def main():
         if b < n_blocks and not args.no_pause:
             input(f"\nBreak. Press Enter to start block {b + 1} (Ctrl+C to stop) ")
 
-    print("\ncalibration done; all sync checks passed" if all_ok
-          else "\ncalibration done, but a sync check FAILED: see above")
+    print(f"\n{session} done; all sync checks passed" if all_ok
+          else f"\n{session} done, but a sync check FAILED: see above")
+
+
+def main():
+    run_session(__doc__, "calibration", config.CALIBRATION_BLOCKS,
+                lambda model, b, duration, rng: (*build_block(model, b, duration, rng), None))
 
 
 if __name__ == "__main__":

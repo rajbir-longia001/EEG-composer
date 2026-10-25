@@ -64,7 +64,7 @@ Temperature update is trial and error: step T; continue if smoothed gain rose, r
 ## Data and git
 
 - Never commit `data/`, `models/`, `*.fif`, `*.h5`, or recording CSVs. Large datasets (e.g. the Di Liberto Bach EEG set, ~6 GB) stay outside the repo.
-- File naming: `YYYY-MM-DD_subjNN_<session>_<run>.h5` (EEG) and `..._notes.csv`; sessions are `oddball`, `calibration`, `live`.
+- File naming: `YYYY-MM-DD_subjNN_<session>_<run>.h5` (EEG) and `..._notes.csv`; sessions are `oddball`, `calibration`, `live`, `violation`. Violation blocks also save `..._violations.csv` (which note_index values were planted violations); the note log itself keeps its 7 columns.
 - Small commits, one branch per person, merge often.
 
 ## Libraries

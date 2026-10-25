@@ -9,7 +9,7 @@ DATA_PROCESSED = ROOT / "data" / "processed"
 MODELS_DIR = ROOT / "models"
 FIGURES_DIR = ROOT / "figures"
 
-SESSIONS = ("oddball", "calibration", "live")
+SESSIONS = ("oddball", "calibration", "live", "violation")
 
 # --- Hardware (g.tec Unicorn BCI Core-8 via g.Pype, Bluetooth 5, 250 Hz) ---
 # Acquisition uses gp.BCICore(). Read the sampling rate from the port context or
@@ -73,6 +73,19 @@ CALIBRATION_TEMPERATURES = [0.5, 1.0, 1.5, 2.0]
 CALIBRATION_BLOCKS = 5     # 5 × 150 s ≈ 12.5 min of melodies
 DRY_RUN_BLOCK_DURATION = 30.0  # s, one short block for --dry-run
 MELODY_GAP_SLOTS = 3       # silent IOI slots between melodies (3 × 0.45 s = 1.35 s)
+
+# --- Violation experiment (analysis/VIOLATION_PLAN.md; fixed before recording) ---
+VIOLATION_TEMPERATURE = 0.5  # predictable melodies
+VIOLATION_RATE = 0.10        # target fraction of notes replaced
+VIOLATION_INTERVAL_TOL = 1   # violation leap within ±1 semitone of the original leap
+VIOLATION_MAX_LEAP = 2       # original and violation leaps both 1–2 semitones (steps), so
+                             # every violation has plenty of interval-matched controls
+VIOLATION_MIN_LEAD = 3       # no violation in a melody's first 3 notes
+VIOLATION_MIN_TAIL = 2       # ... or its last 2
+VIOLATION_MIN_GAP = 4        # at least 4 normal notes between violations
+VIOLATION_BLOCKS = 6         # 6 × ~2.7 min ≈ 16 min
+CONTROL_SEED = 2026          # fixed seed for drawing interval-matched controls
+CONTROL_RATIO = 3            # up to 3 controls per violation per |interval| value
 
 # --- Preprocessing ---
 # Keep the hardware reference: the Core-8 has one GND/REF electrode (shorted internally);

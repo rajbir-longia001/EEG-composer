@@ -2,9 +2,9 @@
 
 Step-by-step plan for the last ~12 hours: record data, analyze it, build the closed loop, and prepare the demo. Run every command from the repo root with `.venv` active (`.venv\Scripts\Activate.ps1`).
 
-**What already works:** the composer, the oddball and calibration recording scripts, ERP and TRF analysis, and live viewing. All of it is tested with fake EEG and silent audio. **Not yet run:** any real recording with the headset and sound, and the closed loop (not written yet).
+**What already works:** the composer, the oddball and calibration recording scripts, ERP and TRF analysis, live viewing, and the closed loop (gain estimate + live loop). All of it is tested with fake EEG, simulated data and silent audio. **Not yet run:** anything with the real headset and sound.
 
-**Suggested split:** one person runs the recordings (steps 1–5) while another builds the closed loop (step 7). The closed loop can be developed against the calibration data as soon as it exists.
+**Suggested split:** one person runs the recordings (steps 1–5) while another prepares the demo (step 8) and, if there's time, writes the Di Liberto adapter (fallback). The time freed by the finished closed loop is best spent on **more data**: extra calibration blocks, or a second listener.
 
 | Step | What | Time |
 |---|---|---|
@@ -15,7 +15,7 @@ Step-by-step plan for the last ~12 hours: record data, analyze it, build the clo
 | 4 | Calibration recording | ~25 min |
 | 5 | Analysis: ERP, TRF, template | 30 min |
 | 6 | Decide: closed loop live, or on recorded data | 5 min |
-| 7 | Closed loop (build + test) | 3–5 h |
+| 7 | Closed loop (built; check + run) | ~40 min |
 | 8 | Demo prep | 1–2 h |
 
 ---
@@ -162,26 +162,29 @@ python -m analysis.trf --subject 1 --save-template
 
 ## 6. Decide (5 min)
 
-- **The template looks good (≥4/5 folds):** build the live closed loop.
-- **Weak or unclear:** build the closed loop to **replay recorded calibration data** instead of running live. The README lists this as the fallback tier, and it's still a complete demo of the method.
+- **The template looks good (≥4/5 folds):** run the live closed loop (step 7).
+- **Weak or unclear:** record more calibration blocks first (step 4). If it's still weak, demo the loop with `run_live --dry-run` on a listener anyway, and present the offline gain check and the simulation as the method demo. The README lists this as the fallback tier.
 
 ---
 
-## 7. Closed loop (3–5 h)
+## 7. Closed loop (~40 min)
 
-Not written yet. Ask Claude to write `closed_loop/gain.py` and `closed_loop/run_live.py`. The pieces:
+Already built: `closed_loop/gain.py` (gain estimate, temperature rule, offline checks) and `closed_loop/run_live.py` (live loop).
 
-1. **Live data:** a small `gp.Sink` subclass whose `step()` adds each EEG frame to a buffer protected by a lock (CLAUDE.md "Hardware and platform"). The recording pipeline gets a third branch: `BCICore → Router → (writer, live sink)`.
-2. **Same preprocessing as the template:** `preprocess.causal_bandpass` (keep the filter state between windows), then keep every 4th sample.
-3. **Note features from the note log**, z-scored with the `stats` saved in the template.
-4. **Gain per 50 s window** (CLAUDE.md "Closed-loop gain"):
-   - residual = EEG − prediction from the acoustic weights;
-   - predicted surprise = surprisal impulses convolved with the surprisal template;
-   - gain = dot(predicted surprise, residual) / dot(predicted surprise, predicted surprise).
-5. **Temperature update:** average the gain over 3 windows, step T by ±0.25, keep going if the gain rose, reverse if it fell, and stay within `TEMPERATURE_BOUNDS`.
-6. **Test it offline first:** run `gain.py` on the calibration recordings. The gain should be near 1 there, since the template was fitted on them. Then run `--simulate`-style data with different effect sizes and check the gain tracks them.
+```powershell
+python -m closed_loop.gain --simulate                    # 10 s: gain tracks a known effect (expect ≈ 0, 0.5, 1, 2)
+python -m closed_loop.gain --subject 1                   # gain per window on calibration data: mean should be ≈ 1
+python -m closed_loop.run_live --dry-run                 # headset, silent, 3 min, subject 0 → needs --template
+python -m closed_loop.run_live --subject 1               # real: 15 min, uses models/subj01_calibration_template.npz
+```
 
-**Time budget:** each temperature decision takes about 2.5 minutes of listening (3 × 50 s windows). A 15-minute live run gives about 6 temperature steps. Plan the demo around that.
+- For the dry run with the real template: `python -m closed_loop.run_live --dry-run --template models/subj01_calibration_template.npz`.
+- **Each window prints** its temperature, the gain, the smoothed gain and the number of notes used. Every 3rd window it prints the decision, e.g. `rose: T 1.25 -> 1.5`.
+- **Outputs:** EEG and note log like any session, plus `..._live_1_loop.csv` (one row per window) and the figure `figures/..._live_1_loop.png` (temperature and gain over time).
+- **Options:** `--minutes 20` for longer, `--start-temperature 0.5` to start low, `--window 50` for the window length in seconds.
+- **Expect noise.** A single 50 s window's gain has an SD of about 0.25–0.3, even on clean simulated data, which is why decisions average 3 windows. On real data, a smoothed gain that stays clearly above 0 shows the template is being picked up live. Whether the temperature settles anywhere in 15 minutes is a bonus.
+- **Time budget:** each decision takes about 2.5 minutes (3 × 50 s windows), so 15 minutes gives about 6 temperature steps.
+- **If gains are all near 0:** check `closed_loop.gain --subject 1` on the calibration data. If that's also near 0, the template is weak (back to step 5). If calibration gives ≈ 1 but live gives ≈ 0, check contact quality, and check that `TIMBRE` and the volume are the same as during calibration.
 
 ---
 
@@ -207,6 +210,10 @@ Not written yet. Ask Claude to write `closed_loop/gain.py` and `closed_loop/run_
 | `python -m analysis.erp --session oddball\|calibration --subject N` | ERPs |
 | `python -m analysis.trf --subject N [--save-template]` | A vs. A+M, template |
 | `python -m analysis.trf --simulate` | check the TRF code |
+| `python -m acquisition.violation [--dry-run] --subject N` | planted-violation blocks |
+| `python -m analysis.erp --session violation --subject N` | pre-registered violation test |
+| `python -m closed_loop.gain --simulate` / `--subject N` | check the gain estimate |
+| `python -m closed_loop.run_live [--dry-run] --subject N` | live closed loop |
 | Add `--fake-eeg` (recording scripts) | no headset needed |
 
 **Files:** recordings go to `data/raw/` (`YYYY-MM-DD_subjNN_<session>_<run>.h5` + `_notes.csv`), figures to `figures/`, models and templates to `models/`. None of `data/` or `models/` is committed.

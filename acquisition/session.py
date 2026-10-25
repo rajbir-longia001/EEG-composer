@@ -40,12 +40,13 @@ def recording_paths(subject, session, run, date=None):
             config.DATA_RAW / f"{stem}_notes.csv")
 
 
-def build_pipeline(eeg_path, serial=None, fake_eeg=False):
+def build_pipeline(eeg_path, serial=None, fake_eeg=False, extra_sinks=()):
     """Build (but don't start) the recording pipeline.
 
     Returns (pipeline, marker). fake_eeg=True uses g.Pype's signal generator
     instead of the headset, so the whole session can be tested without
-    hardware.
+    hardware. extra_sinks get the same stream as the writer (EEG + marker),
+    e.g. the closed loop's live buffer.
     """
     p = gp.Pipeline()
     marker = gp.Marker()
@@ -69,6 +70,8 @@ def build_pipeline(eeg_path, serial=None, fake_eeg=False):
 
     # The writer appends _YYYYMMDD_HHMMSS_mmm to this name; see finalize_eeg_file
     p.connect(last, gp.HDF5Writer(file_name=str(eeg_path)))
+    for sink in extra_sinks:
+        p.connect(last, sink)
     return p, marker
 
 

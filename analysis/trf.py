@@ -161,9 +161,13 @@ def cross_validate(X, y, groups):
     return folds
 
 
-def fit_template(X, y, folds):
+def template_alpha(folds):
+    """Geometric median of the alphas the A+M model chose across folds."""
+    return float(np.exp(np.median(np.log([f["A+M alpha"] for f in folds]))))
+
+
+def fit_template(X, y, alpha):
     """Fit A+M on all data; weights shaped (feature, lag, channel)."""
-    alpha = float(np.exp(np.median(np.log([f["A+M alpha"] for f in folds]))))
     model = Ridge(alpha=alpha).fit(X, y)
     n_lags = X.shape[1] // len(FEATURES_AM)
     weights = model.coef_.T.reshape(len(FEATURES_AM), n_lags, -1)
@@ -323,7 +327,7 @@ def main():
     folds = cross_validate(X, y, groups)
     report(folds, ch_names)
 
-    weights, intercept, alpha = fit_template(X, y, folds)
+    weights, intercept, alpha = fit_template(X, y, template_alpha(folds))
     config.FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     plot_trf(folds, weights, sfreq, ch_names, title=f"{name}: TRF model comparison",
              out_path=config.FIGURES_DIR / f"{name}_trf.png", show=not args.no_show)

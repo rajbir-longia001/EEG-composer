@@ -289,8 +289,16 @@ python -m analysis.erp --session calibration --subject 1     # high vs. low surp
 python -m analysis.trf --simulate                           # check the TRF code on synthetic data first
 python -m analysis.trf --subject 1 --save-template          # A vs. A+M + surprise template
 
+# 3b. Planted violations (pre-registered: analysis/VIOLATION_PLAN.md)
+python -m acquisition.violation --dry-run --fake-eeg   # test first
+python -m acquisition.violation --subject 1            # 6 blocks, ~16 min
+python -m analysis.erp --session violation --subject 1 # the pre-registered Welch test at Fz
+
 # 4. Closed loop
-python -m closed_loop.run_live --template models/<subject>_template.npz
+python -m closed_loop.gain --simulate                       # check: gain tracks a known effect
+python -m closed_loop.gain --subject 1                      # gain per window on calibration data (≈ 1)
+python -m closed_loop.run_live --dry-run --fake-eeg --template models/simulated_effect1.5_template.npz
+python -m closed_loop.run_live --subject 1                  # 15 min live, uses models/subj01_calibration_template.npz
 ```
 
 *(Command-line arguments are the intended interface; update as scripts are implemented. `python acquisition/oddball.py` would fail, because it puts `acquisition/` rather than the repo root on the import path.)*
