@@ -32,21 +32,14 @@ Dry runs use run "dry" and may overwrite each other.
 
 import argparse
 import math
-import time
 
 import numpy as np
 
 import config
-from acquisition.session import build_pipeline, finalize_eeg_file, recording_paths, write_note_log
+from acquisition.session import check_sync, record_block, recording_paths
 from analysis.erp import oddball_epochs, plot_oddball_erp
-from analysis.preprocess import load_recording, marker_events
-from audio.playback import hz_to_midi, play_with_onsets, render_sequence
-
-SYNC_MEAN_TOL = 0.005  # s, allowed error in the mean marker spacing
-# s, allowed marker jitter: 1 sample at 250 Hz. Rounding onsets to 4 ms samples
-# alone gives ~2 ms std when IOI isn't a whole number of samples.
-SYNC_STD_TOL = 0.004
-
+from analysis.preprocess import load_recording
+from audio.playback import hz_to_midi
 
 def make_sequence(n, p_deviant=config.ODDBALL_DEVIANT_PROB,
                   n_lead=config.ODDBALL_LEAD_STANDARDS, seed=None):
@@ -59,83 +52,13 @@ def make_sequence(n, p_deviant=config.ODDBALL_DEVIANT_PROB,
     return seq
 
 
-def record(eeg_path, notes_path, sequence, standard_hz, deviant_hz,
-           silent=False, fake_eeg=False, serial=None, run_id=1):
-    """Play the sequence while recording. Saves the EEG file and the note log
-    (also on Ctrl+C or a crash). Returns the note log DataFrame."""
-    p, marker = build_pipeline(eeg_path, serial=serial, fake_eeg=fake_eeg)
-    rows = []
-    try:
-        p.start()
-        print(f"recording; settling for {config.RECORD_SETTLE:.0f} s ...")
-        time.sleep(config.RECORD_SETTLE)
-
-        freqs = [deviant_hz if d else standard_hz for d in sequence]
-        audio, onsets = render_sequence(freqs, silent=silent)
-        pitches = {False: int(round(float(hz_to_midi(standard_hz)))),
-                   True: int(round(float(hz_to_midi(deviant_hz))))}
-
-        def on_onset(k):
-            # Called as tone k reaches the speaker (see audio/playback.py)
-            i = k + config.FIRST_NOTE_INDEX
-            marker.emit(i)
-            rows.append({"note_index": i, "melody_id": run_id,
-                         "onset_time": time.time(), "pitch": pitches[bool(sequence[k])],
-                         "interval": math.nan, "surprisal": math.nan,
-                         "temperature": math.nan})
-            if i % 25 == 0 or k == len(sequence) - 1:
-                print(f"\r  tone {i}/{len(sequence)}", end="", flush=True)
-
-        try:
-            underflows = play_with_onsets(audio, onsets, on_onset)
-            print()
-            if underflows:
-                print(f"warning: {underflows} audio underflows (glitches); close other programs")
-        except KeyboardInterrupt:
-            print("\nstopped early; saving what was recorded")
-        time.sleep(config.RECORD_TAIL)  # let the last epoch finish recording
-    finally:
-        p.stop()
-        p.close()
-        notes = write_note_log(rows, notes_path)
-        if rows:
-            finalize_eeg_file(eeg_path)
-    print(f"saved {eeg_path}\nsaved {notes_path}")
-    return notes
-
-
-def check_sync(raw, notes, ioi=config.IOI):
-    """Compare recorded markers with the note log. Prints a report; returns
-    True if every check passes."""
-    events = marker_events(raw)
-    sfreq = raw.info["sfreq"]
-    expected = notes["note_index"].to_numpy(dtype=int)
-    checks = []
-
-    checks.append(("one marker per tone", len(events) == len(expected),
-                   f"{len(events)} markers, {len(expected)} tones"))
-    checks.append(("marker values match note log",
-                   np.array_equal(events[:, 2], expected), "values = note_index, in order"))
-
-    if len(events) > 2:
-        spacing = np.diff(events[:, 0]) / sfreq
-        mean_err = spacing.mean() - ioi
-        checks.append(("marker spacing = IOI", abs(mean_err) < SYNC_MEAN_TOL,
-                       f"mean {spacing.mean() * 1000:.1f} ms vs IOI {ioi * 1000:.0f} ms"))
-        checks.append(("marker jitter small", spacing.std() < SYNC_STD_TOL,
-                       f"std {spacing.std() * 1000:.1f} ms, "
-                       f"worst {np.abs(spacing - ioi).max() * 1000:.1f} ms "
-                       f"(1 sample = {1000 / sfreq:.1f} ms)"))
-        # The host clock should agree; a mismatch means EEG samples were dropped
-        host = np.diff(notes["onset_time"].to_numpy()[:len(events)])
-        drift = (spacing[:len(host)] - host).sum()
-        checks.append(("EEG clock agrees with host clock", abs(drift) < 0.05,
-                       f"total difference {drift * 1000:.0f} ms over {spacing.sum():.0f} s"))
-
-    print("\nSync check")
-    for name, ok, detail in checks:
-        print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-    return all(ok for _, ok, _ in checks)
+def oddball_notes(sequence, standard_hz, deviant_hz, block_id=1):
+    """Note-log rows for the tone sequence: pitch = nearest MIDI number;
+    surprisal, interval and temperature don't apply (NaN)."""
+    pitch = {False: int(round(float(hz_to_midi(standard_hz)))),
+             True: int(round(float(hz_to_midi(deviant_hz))))}
+    return [{"melody_id": block_id, "pitch": pitch[bool(d)], "interval": math.nan,
+             "surprisal": math.nan, "temperature": math.nan} for d in sequence]
 
 
 def main():
@@ -176,15 +99,17 @@ def main():
           f"{' [DRY RUN: silent]' if args.dry_run else ''}"
           f"{' [FAKE EEG]' if args.fake_eeg else ''}")
 
-    notes = record(eeg_path, notes_path, sequence, args.standard_hz, args.deviant_hz,
-                   silent=args.dry_run, fake_eeg=args.fake_eeg, serial=args.serial,
-                   run_id=1)
+    freqs = [args.deviant_hz if d else args.standard_hz for d in sequence]
+    notes, spacing = record_block(eeg_path, notes_path, freqs,
+                                  oddball_notes(sequence, args.standard_hz, args.deviant_hz),
+                                  silent=args.dry_run, fake_eeg=args.fake_eeg,
+                                  serial=args.serial)
     if notes.empty:
         print("no tones were played; nothing to check")
         return
 
     raw = load_recording(eeg_path)
-    sync_ok = check_sync(raw, notes)
+    sync_ok = check_sync(raw, notes, spacing)
 
     epochs = oddball_epochs(raw, notes)
     kept = {c: len(epochs[c]) for c in ("standard", "deviant")}

@@ -16,6 +16,8 @@ Hackathon project (neurotech, time-limited). A Markov melody model trained on Ba
 | 5–6 | `analysis/` | MNE preprocessing, ERPs, TRFs, per-listener template |
 | 7 | `closed_loop/` | live gain estimate and temperature updates |
 
+Composer modelling decisions (what's settled, tentative, open) live in `composer/DECISIONS.md`; check it before changing how melodies are loaded, represented or modelled.
+
 Shared constants live in `config.py`. Never hard-code channel names, sampling rates, tempo, filter cutoffs, lag ranges or paths in modules; import them from `config.py`.
 
 ## Invariants (do not break these)
@@ -46,7 +48,7 @@ Shared constants live in `config.py`. Never hard-code channel names, sampling ra
 
 - Inter-onset interval: 0.4–0.5 s, isochronous
 - Markov context: 2–3 previous pitches, with smoothing
-- ERP filter: 1–30 Hz; TRF filter: 1–8 Hz; TRF sampling rate: 64 Hz
+- ERP filter: 1–30 Hz; TRF filter: causal 1–8 Hz; TRF sampling rate: 62.5 Hz (every 4th sample of 250 Hz; 64 Hz would need non-causal resampling)
 - TRF lags: −0.1 to 0.5 s; ridge alpha chosen by cross-validation
 - ERP epochs: −0.1 to 0.5 s, baseline (None, 0), reject ~100–150 µV
 - Closed-loop window: 45–60 s, gain smoothed over several windows

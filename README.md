@@ -117,7 +117,7 @@ This project turns that finding into an interactive system:
 - Load the HDF5 recording into MNE (µV → volts; drop the `master_index`, `valid`, `host_time` timeline channels; the marker channel becomes a stim channel), then apply the standard 10-20 montage.
 - Mark bad channels. Keep the hardware reference (the Core-8's GND/REF electrode on the right mastoid). Do **not** re-reference to the average: with 8 mostly central channels, the average contains much of the Fz/Cz response and would cancel it.
 - Bandpass: ~1–8 Hz for TRF analysis, ~1–30 Hz for ERP plots.
-- Downsample to 64 Hz for TRFs.
+- For TRFs: causal 1–8 Hz filter, then keep every 4th sample (250 → 62.5 Hz). The same causal pipeline is used offline and live, so the template's timing matches the live EEG.
 - Reject epochs/segments with large artifacts. MNE thresholds are in volts: `reject=dict(eeg=120e-6)` means 120 µV.
 - Live loop: **causal** filters only (`gp.Bandpass`, which is causal by default, or `scipy.signal.sosfilt`).
 - The surprise template used live must be fitted on data filtered with the **same causal filter**. Zero-phase and causal filters give responses with different timing, so a template fitted on zero-phase data would not line up with live EEG and would underestimate the gain.
@@ -281,11 +281,13 @@ python -m analysis.erp --session oddball --subject 1 --run 1   # re-plot later
 python -m composer.markov --train
 
 # 2. Calibration recording (10–15 min)
-python -m acquisition.record --session calibration
+python -m acquisition.record --dry-run --fake-eeg   # test first: no hardware, silent
+python -m acquisition.record --subject 1            # 5 blocks × ~2.5 min, break between blocks
 
 # 3. Analysis: ERPs, TRF comparison, save template
-python -m analysis.erp --session calibration
-python -m analysis.trf --session calibration --save-template
+python -m analysis.erp --session calibration --subject 1     # high vs. low surprisal ERP
+python -m analysis.trf --simulate                           # check the TRF code on synthetic data first
+python -m analysis.trf --subject 1 --save-template          # A vs. A+M + surprise template
 
 # 4. Closed loop
 python -m closed_loop.run_live --template models/<subject>_template.npz

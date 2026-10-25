@@ -39,11 +39,28 @@ def hz_to_midi(hz):
 
 
 def make_tone(freq_hz, duration=config.NOTE_DURATION, sfreq=config.AUDIO_SFREQ,
-              amplitude=config.TONE_AMPLITUDE, ramp=config.RAMP_DURATION):
-    """Sine tone with raised-cosine onset/offset ramps, as float32."""
+              amplitude=config.TONE_AMPLITUDE, ramp=config.RAMP_DURATION,
+              timbre=config.TIMBRE):
+    """One note as float32, with raised-cosine onset/offset ramps.
+
+    "sine": a pure tone with peak `amplitude`.
+    "piano": a struck-string imitation: harmonics 1..PIANO_HARMONICS with
+    amplitudes 1/k, each decaying exponentially (higher ones faster), scaled
+    to the same RMS as the sine. Every pitch gets the same harmonic recipe,
+    envelope and RMS, so only pitch varies (CLAUDE.md invariant 8).
+    """
     n = int(round(duration * sfreq))
     t = np.arange(n) / sfreq
-    tone = amplitude * np.sin(2 * np.pi * freq_hz * t)
+    if timbre == "sine":
+        tone = amplitude * np.sin(2 * np.pi * freq_hz * t)
+    elif timbre == "piano":
+        tone = np.zeros(n)
+        for k in range(1, config.PIANO_HARMONICS + 1):
+            decay = np.exp(-t * np.sqrt(k) / config.PIANO_DECAY)
+            tone += np.sin(2 * np.pi * k * freq_hz * t) * decay / k
+        tone *= (amplitude / np.sqrt(2)) / np.sqrt(np.mean(tone ** 2))
+    else:
+        raise ValueError(f"unknown TIMBRE {timbre!r}; use 'sine' or 'piano'")
     n_ramp = int(round(ramp * sfreq))
     if n_ramp > 0:
         rise = 0.5 * (1 - np.cos(np.linspace(0, np.pi, n_ramp)))
@@ -53,22 +70,28 @@ def make_tone(freq_hz, duration=config.NOTE_DURATION, sfreq=config.AUDIO_SFREQ,
 
 
 def render_sequence(freqs_hz, ioi=config.IOI, sfreq=config.AUDIO_SFREQ, silent=False):
-    """Render notes back to back, one every IOI.
+    """Render notes back to back, one slot every IOI.
+
+    A slot whose frequency is None is a silent beat (e.g. a gap between
+    melodies): it takes one IOI but has no tone and no onset.
 
     Returns (audio, onsets): a float32 array and the sample index of each
-    note onset. silent=True renders zeros with identical timing (dry runs).
+    sounding note's onset. silent=True renders zeros with identical timing
+    (dry runs).
     """
     if config.NOTE_DURATION >= ioi:
         raise ValueError("NOTE_DURATION must be shorter than IOI")
     step = int(round(ioi * sfreq))
     lead = int(round(LEAD_SILENCE * sfreq))
     n_tone = int(round(config.NOTE_DURATION * sfreq))
-    onsets = lead + step * np.arange(len(freqs_hz))
+    slots = lead + step * np.arange(len(freqs_hz))
+    onsets = np.array([s for s, f in zip(slots, freqs_hz) if f is not None], dtype=int)
     audio = np.zeros(lead + step * len(freqs_hz), dtype=np.float32)
     if not silent:
-        tones = {f: make_tone(f, sfreq=sfreq) for f in set(freqs_hz)}
-        for f, start in zip(freqs_hz, onsets):
-            audio[start:start + n_tone] = tones[f]
+        tones = {f: make_tone(f, sfreq=sfreq) for f in set(freqs_hz) if f is not None}
+        for f, start in zip(freqs_hz, slots):
+            if f is not None:
+                audio[start:start + n_tone] = tones[f]
     return audio, onsets
 
 

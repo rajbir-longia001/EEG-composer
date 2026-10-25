@@ -37,13 +37,22 @@ AUDIO_SFREQ = 44100
 IOI = 0.45            # inter-onset interval, s (isochronous)
 NOTE_DURATION = 0.35  # tone length, s (must be < IOI)
 RAMP_DURATION = 0.005  # onset/offset ramps, s
-TONE_AMPLITUDE = 0.2   # fixed loudness, 0..1
+TONE_AMPLITUDE = 0.2   # fixed loudness, 0..1 (sine: peak; piano: same RMS as that sine)
+TIMBRE = "piano"       # "sine" or "piano"; must match between calibration and live
+PIANO_HARMONICS = 6    # partials in the piano-like tone
+PIANO_DECAY = 0.25     # s, decay time constant of the fundamental (higher partials decay faster)
 
 # --- Composer ---
 MARKOV_ORDER = 2        # previous pitches used as context
 SMOOTHING_ALPHA = 0.1   # additive smoothing for unseen transitions
 PITCH_RANGE = (55, 84)  # MIDI pitches the model can emit (G3..C6)
-MELODY_LENGTH = 32      # notes per generated melody
+MELODY_LENGTH = 32      # notes per generated melody (before the tonic ending)
+MERGE_REPEATS = True    # train on melodies with repeated notes merged (DECISIONS #20)
+TONIC_PC = 0            # every melody is transposed so its tonic is C
+END_ON_TONIC = True     # keep sampling past MELODY_LENGTH until a tonic (DECISIONS #21)
+MAX_EXTRA_NOTES = 8     # give up on the tonic ending after this many extra notes
+RANDOM_KEY = True       # transpose each melody to a random key at playback (DECISIONS #18)
+KEY_SHIFT_RANGE = (-5, 6)  # semitones, inclusive: all 12 keys, smallest register moves
 DEFAULT_TEMPERATURE = 1.0
 
 # --- Oddball sanity check ---
@@ -61,6 +70,9 @@ RECORD_TAIL = 1.0    # s of EEG after the last tone, so its epoch is complete
 # --- Recording protocol ---
 BLOCK_DURATION = 150.0  # s, 2–3 minute blocks
 CALIBRATION_TEMPERATURES = [0.5, 1.0, 1.5, 2.0]
+CALIBRATION_BLOCKS = 5     # 5 × 150 s ≈ 12.5 min of melodies
+DRY_RUN_BLOCK_DURATION = 30.0  # s, one short block for --dry-run
+MELODY_GAP_SLOTS = 3       # silent IOI slots between melodies (3 × 0.45 s = 1.35 s)
 
 # --- Preprocessing ---
 # Keep the hardware reference: the Core-8 has one GND/REF electrode (shorted internally);
@@ -68,7 +80,12 @@ CALIBRATION_TEMPERATURES = [0.5, 1.0, 1.5, 2.0]
 # would cancel much of the Fz/Cz response.
 ERP_BAND = (1.0, 30.0)  # Hz
 TRF_BAND = (1.0, 8.0)   # Hz
-TRF_SFREQ = 64          # Hz after downsampling
+TRF_DECIM = 4           # keep every 4th sample after the causal lowpass: 250 → 62.5 Hz.
+                        # (64 Hz isn't an integer ratio of 250, and resampling to it
+                        # would need a non-causal filter the live loop can't use.)
+BAD_FLAT_UV = 0.5       # channel std (1–30 Hz) below this = flat / disconnected
+BAD_NOISY_FACTOR = 4.0  # channel std above this × median std = noisy
+ARTIFACT_PAD = 0.25     # s masked either side of a TRF sample over ERP_REJECT
 NOTCH_BANDS = [(48.0, 52.0), (58.0, 62.0)]  # Hz, 50 and 60 Hz mains (US is 60)
 CAUSAL_FILTER_ORDER = 4  # Butterworth order for gp.Bandpass / scipy sosfilt (live + template fit)
 
